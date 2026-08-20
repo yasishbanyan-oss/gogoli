@@ -4,14 +4,14 @@ from core import *
 async def command_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message:
         return
-    chat_type = update.effective_chat.type
-    bot_info = await context.bot.get_me()
-    db = load_db()
+
+    chat = update.effective_chat
+    chat_type = chat.type if chat else ""
     user = update.effective_user
 
     # Deep-link entry for the per-group automatic-response manager.
-    # The group id comes from the panel button, so a user who manages several
-    # groups always enters the exact group that generated the link.
+    # This is intentionally kept before the normal PV /start response because
+    # the deep-link has its own state-machine entry point.
     if chat_type == "private" and user and not user.is_bot:
         args = list(getattr(context, "args", []) or [])
         if args and args[0].startswith("autoresp_"):
@@ -23,38 +23,66 @@ async def command_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await enter_auto_response_manager(update, context, target_group_id)
                 return
 
-        # A normal /start is a real bot command, so it must cancel an
-        # unfinished automatic-response flow instead of becoming a trigger.
-        cancel_auto_response_flow(db, user.id)
-
-    if user and not user.is_bot and chat_type == "private":
-        uid_str = str(user.id)
-        started_users = db.setdefault("started_users", {})
-        now_ts = datetime.now().timestamp()
-        if uid_str not in started_users:
-            started_users[uid_str] = {
-                "user_id": user.id,
-                "username": user.username or "",
-                "fullname": user.full_name or "کاربر",
-                "first_seen": now_ts,
-                "last_seen": now_ts
-            }
-        else:
-            started_users[uid_str]["last_seen"] = now_ts
-            started_users[uid_str]["fullname"] = user.full_name or "کاربر"
-            started_users[uid_str]["username"] = user.username or ""
-        mark_db_dirty()
-        save_db(force=True)
-    
     if chat_type == "private":
-        # در پیوی، /start باید همان منوی اصلی راهنما را نمایش دهد؛
-        # این بخش قبلاً پیام «اضافه کردن گودی به گروه» را نشان می‌داد.
-        # رفتار deep-link بالا دست‌نخورده باقی می‌ماند.
-        await command_help(update, context)
+        # IMPORTANT: send the visible /start response BEFORE touching the DB.
+        # A damaged/locked/very large database must never make /start appear
+        # dead in PV. Database bookkeeping below is best-effort only.
+        try:
+            bot_info = await context.bot.get_me()
+            bot_username = getattr(bot_info, "username", None) or getattr(context.bot, "username", None) or ""
+        except Exception:
+            logger.exception("Failed to get bot username for /start; using fallback")
+            bot_username = getattr(context.bot, "username", None) or ""
+
+        start_pv_msg = (
+            '<b>سلام عزیزم! به ربات جذاب من خوش اومدی! <tg-emoji emoji-id="5816739230482701944">⚡️</tg-emoji></b>\n'
+            '<b>با استفاده از دکمه شیشه‌ای زیر منو به گروهت اضافه کن! <tg-emoji emoji-id="5818785846823755322">😻</tg-emoji></b>\n\n'
+            '<b>بعد از اضافه کردن با ارسال دستور راهنما میتونی با من آشنا بشی! <tg-emoji emoji-id="5818984798298841943">⏳</tg-emoji></b>'
+        )
+        group_url = f"https://t.me/{bot_username}?startgroup=true" if bot_username else None
+        button_kwargs = {
+            "style": "success",
+            "icon_custom_emoji_id": "4956745198521549627",
+        }
+        if group_url:
+            button_kwargs["url"] = group_url
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("اضافه کردن گودی به گروه", **button_kwargs)]
+        ])
+
+        # This is the critical response. Do not put save_db() before it.
+        await update.message.reply_text(start_pv_msg, reply_markup=kb, parse_mode=ParseMode.HTML)
+
+        # PV bookkeeping is deliberately non-fatal. If persistence fails, the
+        # user still receives /start and can continue using the bot.
+        if user and not user.is_bot:
+            try:
+                db = load_db()
+                cancel_auto_response_flow(db, user.id)
+                uid_str = str(user.id)
+                started_users = db.setdefault("started_users", {})
+                now_ts = datetime.now().timestamp()
+                if uid_str not in started_users:
+                    started_users[uid_str] = {
+                        "user_id": user.id,
+                        "username": user.username or "",
+                        "fullname": user.full_name or "کاربر",
+                        "first_seen": now_ts,
+                        "last_seen": now_ts
+                    }
+                else:
+                    started_users[uid_str]["last_seen"] = now_ts
+                    started_users[uid_str]["fullname"] = user.full_name or "کاربر"
+                    started_users[uid_str]["username"] = user.username or ""
+                mark_db_dirty()
+                save_db(force=True)
+            except Exception:
+                logger.exception("PV /start database bookkeeping failed; /start response was already sent")
         return
-    else:
-        start_group_msg = '<b>بله عزیزم؟ من تو گروهم آماده و حاضر! <tg-emoji emoji-id="5283268017025736027">🤨</tg-emoji></b>'
-        await update.message.reply_text(start_group_msg, parse_mode=ParseMode.HTML)
+
+    # Group /start keeps its existing group-only response.
+    start_group_msg = '<b>بله عزیزم؟ من تو گروهم آماده و حاضر! <tg-emoji emoji-id="5283268017025736027">🤨</tg-emoji></b>'
+    await update.message.reply_text(start_group_msg, parse_mode=ParseMode.HTML)
 
 async def command_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message:
