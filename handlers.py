@@ -47,15 +47,11 @@ async def command_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         save_db(force=True)
     
     if chat_type == "private":
-        start_pv_msg = (
-            '<b>سلام عزیزم! به ربات جذاب من خوش اومدی! <tg-emoji emoji-id="5816739230482701944">⚡️</tg-emoji></b>\n'
-            '<b>با استفاده از دکمه شیشه‌ای زیر منو به گروهت اضافه کن! <tg-emoji emoji-id="5818785846823755322">😻</tg-emoji></b>\n\n'
-            '<b>بعد از اضافه کردن با ارسال دستور راهنما میتونی با من آشنا بشی! <tg-emoji emoji-id="5818984798298841943">⏳</tg-emoji></b>'
-        )
-        kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("اضافه کردن گودی به گروه", url=f"https://t.me/{bot_info.username}?startgroup=true", style="success", icon_custom_emoji_id="4956745198521549627")]
-        ])
-        await update.message.reply_text(start_pv_msg, reply_markup=kb, parse_mode=ParseMode.HTML)
+        # در پیوی، /start باید همان منوی اصلی راهنما را نمایش دهد؛
+        # این بخش قبلاً پیام «اضافه کردن گودی به گروه» را نشان می‌داد.
+        # رفتار deep-link بالا دست‌نخورده باقی می‌ماند.
+        await command_help(update, context)
+        return
     else:
         start_group_msg = '<b>بله عزیزم؟ من تو گروهم آماده و حاضر! <tg-emoji emoji-id="5283268017025736027">🤨</tg-emoji></b>'
         await update.message.reply_text(start_group_msg, parse_mode=ParseMode.HTML)
