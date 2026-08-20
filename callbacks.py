@@ -9,6 +9,15 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
     db = load_db()
     session_k = get_session_key(user_id, current_chat_id)
 
+    # Every group-management panel is owned by the user who opened it.
+    # This guard runs before any nested panel callback, so another manager
+    # cannot press buttons on someone else's panel and change group settings.
+    if query.message and query.message.chat and query.message.chat.type in ("group", "supergroup"):
+        panel_session = get_group_panel_session(db, current_chat_id, query.message.message_id)
+        if panel_session and int(panel_session.get("owner_id", 0)) != int(user_id):
+            await query.answer("این پنل برای شما نیست.", show_alert=True)
+            return
+
     # Filter-word panel callbacks are isolated in filter_handler.py.
     if await handle_filter_callback(query, context, db):
         return
@@ -221,13 +230,32 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         return
 
     if data.startswith("help_"):
+        parts = data.split(":", 1)
+        help_key = parts[0]
+        try:
+            help_owner = int(parts[1]) if len(parts) == 2 else 0
+        except (TypeError, ValueError):
+            help_owner = 0
+        if help_owner and int(user_id) != help_owner:
+            await query.answer("این پنل برای شما نیست.", show_alert=True)
+            return
         help_texts = {
             "help_fun": "<b>راهنمای سرگرمی</b>\nدستورات سرگرمی ربات در این بخش معرفی می‌شوند.",
             "help_rude": "<b>راهنمای بی ادبی</b>\nدستورات این بخش برای سرگرمی و شوخی هستند.",
             "help_useful": "<b>راهنمای کاربردی</b>\nدستورات کاربردی ربات را از این بخش مشاهده کنید.",
             "help_admin": "<b>راهنمای مدیریتی</b>\nدستورات مدیریتی گروه در این بخش قرار دارند.",
         }
-        await query.message.edit_text(help_texts.get(data, "<b>راهنما</b>"), parse_mode=ParseMode.HTML)
+        if help_key not in help_texts:
+            await query.answer("گزینه راهنما نامعتبر است.", show_alert=True)
+            return
+        owner_suffix = f":{help_owner}" if help_owner else ""
+        help_kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("راهنمای سرگرمی", callback_data=f"help_fun{owner_suffix}", style="primary", icon_custom_emoji_id="5415940089375106928"),
+             InlineKeyboardButton("راهنمای بی ادبی", callback_data=f"help_rude{owner_suffix}", style="primary", icon_custom_emoji_id="5832633418386513259")],
+            [InlineKeyboardButton("راهنمای کاربردی", callback_data=f"help_useful{owner_suffix}", style="primary", icon_custom_emoji_id="5830338333892418460"),
+             InlineKeyboardButton("راهنمای مدیریتی", callback_data=f"help_admin{owner_suffix}", style="primary", icon_custom_emoji_id="5803348359972393936")]
+        ])
+        await query.message.edit_text(help_texts[help_key], reply_markup=help_kb, parse_mode=ParseMode.HTML)
         await query.answer()
         return
 
@@ -805,11 +833,79 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
 
         buttons = [
             [InlineKeyboardButton(" تمام گروه‌ها", callback_data="bcast_dest:groups", style="primary")],
+            [InlineKeyboardButton(" گروه خاص", callback_data="bcast_dest:group_select", style="primary")],
             [InlineKeyboardButton(" تمام کاربران خصوصی", callback_data="bcast_dest:users", style="primary")],
             [InlineKeyboardButton(" همه (گروه‌ها + کاربران)", callback_data="bcast_dest:all", style="success")],
             [InlineKeyboardButton(" بازگشت", callback_data="panel_bcast_type_select", style="danger")]
         ]
         await query.message.edit_text(" <b>مقصد ارسال پیام همگانی را انتخاب کنید:</b>", reply_markup=InlineKeyboardMarkup(buttons), parse_mode=ParseMode.HTML)
+        return
+
+    elif data == "bcast_dest:group_select":
+        if int(user_id) != int(OWNER_ID):
+            await query.answer("این بخش مخصوص مالک اصلی است.", show_alert=True)
+            return
+        builder = db["states"]["broadcast_builder"].setdefault(str(user_id), {})
+        builder["step"] = "group_select"
+        buttons = []
+        active_chats = db.get("active_chats", []) or []
+        banned_groups = {str(x) for x in (db.get("global_group_bans", {}) or {}).keys()}
+        for cid in active_chats:
+            if str(cid) in banned_groups:
+                continue
+            g = get_group_data(db, int(cid))
+            title = html.escape(g.get("title") or f"گروه {cid}")
+            buttons.append([InlineKeyboardButton(title, callback_data=f"bcast_group:{int(cid)}", style="primary")])
+        if not buttons:
+            await query.answer("هیچ گروه فعالی برای ارسال پیدا نشد.", show_alert=True)
+            return
+        buttons.append([InlineKeyboardButton("بازگشت", callback_data="bcast_mode_back_dest", style="danger")])
+        await query.message.edit_text(" <b>گروه موردنظر برای ارسال پیام همگانی را انتخاب کنید:</b>", reply_markup=InlineKeyboardMarkup(buttons), parse_mode=ParseMode.HTML)
+        return
+
+    elif data == "bcast_mode_back_dest":
+        if int(user_id) != int(OWNER_ID):
+            await query.answer("این بخش مخصوص مالک اصلی است.", show_alert=True)
+            return
+        builder = db["states"]["broadcast_builder"].setdefault(str(user_id), {})
+        buttons = [
+            [InlineKeyboardButton(" تمام گروه‌ها", callback_data="bcast_dest:groups", style="primary")],
+            [InlineKeyboardButton(" گروه خاص", callback_data="bcast_dest:group_select", style="primary")],
+            [InlineKeyboardButton(" تمام کاربران خصوصی", callback_data="bcast_dest:users", style="primary")],
+            [InlineKeyboardButton(" همه (گروه‌ها + کاربران)", callback_data="bcast_dest:all", style="success")],
+            [InlineKeyboardButton(" بازگشت", callback_data="panel_bcast_type_select", style="danger")]
+        ]
+        await query.message.edit_text(" <b>مقصد ارسال پیام همگانی را انتخاب کنید:</b>", reply_markup=InlineKeyboardMarkup(buttons), parse_mode=ParseMode.HTML)
+        return
+
+    elif data.startswith("bcast_group:"):
+        if int(user_id) != int(OWNER_ID):
+            await query.answer("این بخش مخصوص مالک اصلی است.", show_alert=True)
+            return
+        try:
+            cid = int(data.split(":", 1)[1])
+        except (TypeError, ValueError):
+            await query.answer("گروه انتخاب‌شده نامعتبر است.", show_alert=True)
+            return
+        if cid not in [int(x) for x in (db.get("active_chats", []) or [])]:
+            await query.answer("این گروه دیگر در فهرست گروه‌های فعال نیست.", show_alert=True)
+            return
+        builder = db["states"]["broadcast_builder"].setdefault(str(user_id), {})
+        builder["dest"] = "specific_group"
+        builder["group_id"] = cid
+        builder["step"] = "content"
+        mark_db_dirty(); save_db()
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("لغو", callback_data="bcast_cancel", style="danger")]])
+        mode = builder.get("mode", "media")
+        g = get_group_data(db, cid)
+        title = html.escape(g.get("title") or str(cid))
+        if mode == "media":
+            prompt = f" <b>مقصد: {title}</b>\n\n<b>لطفاً متن، عکس، GIF، ویدیو، استیکر یا فایل موردنظر را بفرستید:</b>"
+        elif mode == "poll":
+            prompt = f" <b>مقصد: {title}</b>\n\n<b>لطفاً نظرسنجی موردنظر را ارسال کنید:</b>\n\n<code>سؤال\nگزینه 1\nگزینه 2</code>"
+        else:
+            prompt = f" <b>مقصد: {title}</b>\n\n<b>لطفاً کوئیز را به صورت زیر ارسال کنید:</b>\n\n<code>سؤال\nگزینه 1\nگزینه 2\nصحیح: 1</code>"
+        await query.message.edit_text(prompt, reply_markup=kb, parse_mode=ParseMode.HTML)
         return
 
     elif data.startswith("bcast_dest:"):
@@ -819,6 +915,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         dest = data.replace("bcast_dest:", "")
         builder = db["states"]["broadcast_builder"].setdefault(str(user_id), {})
         builder["dest"] = dest
+        builder.pop("group_id", None)
         builder["step"] = "content"
         mark_db_dirty()
         save_db()
@@ -851,6 +948,10 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         targets = []
         if dest in ["groups", "all"]:
             targets.extend(db.get("active_chats", []))
+        elif dest == "specific_group":
+            specific_group_id = builder.get("group_id")
+            if specific_group_id is not None:
+                targets.append(int(specific_group_id))
         if dest in ["users", "all"]:
             targets.extend([int(u) for u in db.get("started_users", {}).keys()])
 
@@ -897,6 +998,8 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         if not await is_configured_group_manager(context, cid, user_id):
             await query.answer(" دسترسی غیرمجاز!", show_alert=True)
             return
+        if not get_group_panel_session(db, cid, query.message.message_id):
+            register_group_panel_session(db, cid, query.message.message_id, user_id)
         await render_group_admin_panel_message(query, cid)
         return
 
@@ -1100,7 +1203,11 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         allowed = await is_configured_group_manager(context, cid, user_id)
         if list_type == "owners": allowed = await is_primary_or_bot_owner_of_group(context, cid, g, user_id)
         if not allowed:
-            await query.answer(" دسترسی غیرمجاز!", show_alert=True); return
+            if list_type == "owners":
+                await query.answer("این دستور فقط مختص مالک گروه میباشد.", show_alert=True)
+            else:
+                await query.answer(" دسترسی غیرمجاز!", show_alert=True)
+            return
         await render_cleanup_confirm(query, list_type, cid); return
 
     elif data.startswith("list_cleanup_cancel:"):
@@ -1109,7 +1216,11 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         allowed = await is_configured_group_manager(context, cid, user_id)
         if list_type == "owners": allowed = await is_primary_or_bot_owner_of_group(context, cid, g, user_id)
         if not allowed:
-            await query.answer(" دسترسی غیرمجاز!", show_alert=True); return
+            if list_type == "owners":
+                await query.answer("این دستور فقط مختص مالک گروه میباشد.", show_alert=True)
+            else:
+                await query.answer(" دسترسی غیرمجاز!", show_alert=True)
+            return
         names = {"owners": "مالکین", "admins": "مدیران", "special": "ویژه", "exempt": "معاف", "warns": "اخطارها", "muted": "سکوت ها", "banned": "بن ها"}
         name = names.get(list_type, "لیست")
         await query.message.edit_text(f'<b><tg-emoji emoji-id="{PREMIUM_OK_EMOJI}">✔️</tg-emoji> پاکسازی لیست {name} با موفقیت لغو شد.</b>', reply_markup=None, parse_mode=ParseMode.HTML)
@@ -1120,7 +1231,11 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         g = get_group_data(db, cid); allowed = await is_configured_group_manager(context, cid, user_id)
         if list_type == "owners": allowed = await is_primary_or_bot_owner_of_group(context, cid, g, user_id)
         if not allowed:
-            await query.answer(" دسترسی غیرمجاز!", show_alert=True); return
+            if list_type == "owners":
+                await query.answer("این دستور فقط مختص مالک گروه میباشد.", show_alert=True)
+            else:
+                await query.answer(" دسترسی غیرمجاز!", show_alert=True)
+            return
         # A list may become empty between the command and confirmation.
         mgmt = g.get("management", {}) or {}
         current_values = {
@@ -1243,6 +1358,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
     elif data == "panel_group_close":
         try:
             close_text = f'• پنل با موفقیت بسته شد! <tg-emoji emoji-id="{PARTY_CUSTOM_EMOJI_ID}">🎉</tg-emoji>'
+            clear_group_panel_session(db, current_chat_id, query.message.message_id)
             await query.message.edit_text(close_text, reply_markup=None, parse_mode=ParseMode.HTML)
         except Exception:
             try:
