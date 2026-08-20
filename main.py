@@ -1,9 +1,9 @@
 # GoodiBot entry point
 import core
 import services, permissions, moderation, management, welcome, comments, jobs, links
-import panels, games, whisper, callbacks, handlers, support, help, fun, filter_handler, auto_responses, backup_restore
+import panels, games, whisper, callbacks, handlers, support, help, fun, filter_handler, auto_responses, backup_restore, start_handler
 
-registry = core.bind_all_modules([services, permissions, moderation, management, welcome, comments, jobs, links, panels, games, whisper, callbacks, handlers, support, help, fun, filter_handler, auto_responses, backup_restore])
+registry = core.bind_all_modules([services, permissions, moderation, management, welcome, comments, jobs, links, panels, games, whisper, callbacks, handlers, support, help, fun, filter_handler, auto_responses, backup_restore, start_handler])
 globals().update(registry)
 from core import *
 
@@ -30,6 +30,9 @@ def main():
     app.add_handler(ChatMemberHandler(track_chats, ChatMemberHandler.MY_CHAT_MEMBER))
     app.add_handler(InlineQueryHandler(handle_inline_whisper))
     app.add_handler(CallbackQueryHandler(handle_callback_query))
+    # Fast private /start handler: registered before the legacy handler so PV /start
+    # never depends on the old get_me()-based path. Group /start remains unchanged.
+    app.add_handler(CommandHandler("start", command_start_private, filters=filters.ChatType.PRIVATE))
     app.add_handler(CommandHandler("start", command_start))
     app.add_handler(CommandHandler("help", command_help))
     app.add_handler(CommandHandler("panel", command_owner_panel))
