@@ -61,6 +61,36 @@ async def edit_owner_panel_message(query):
     text, keyboard = get_owner_panel_content(db)
     await query.message.edit_text(text, reply_markup=keyboard, parse_mode=ParseMode.HTML)
 
+
+
+def register_group_panel_session(db: dict, chat_id: int, message_id: int, owner_id: int):
+    sessions = db.setdefault("_group_panel_sessions", {})
+    key = f"{int(chat_id)}:{int(message_id)}"
+    sessions[key] = {
+        "chat_id": int(chat_id),
+        "message_id": int(message_id),
+        "owner_id": int(owner_id),
+        "updated_at": time.time(),
+    }
+    # Keep the lightweight session store bounded.
+    if len(sessions) > 500:
+        old_keys = sorted(sessions, key=lambda k: float((sessions.get(k) or {}).get("updated_at", 0)))
+        for old_key in old_keys[: max(0, len(sessions) - 500)]:
+            sessions.pop(old_key, None)
+    mark_db_dirty()
+    save_db(force=True)
+
+
+def get_group_panel_session(db: dict, chat_id: int, message_id: int):
+    return (db.get("_group_panel_sessions", {}) or {}).get(f"{int(chat_id)}:{int(message_id)}")
+
+
+def clear_group_panel_session(db: dict, chat_id: int, message_id: int):
+    sessions = db.get("_group_panel_sessions", {}) or {}
+    sessions.pop(f"{int(chat_id)}:{int(message_id)}", None)
+    mark_db_dirty()
+    save_db(force=True)
+
 def build_group_admin_panel_content(chat_id: int, title: str) -> tuple[str, InlineKeyboardMarkup]:
     esc_title = html.escape(title or "این گروه")
     text = (
@@ -84,6 +114,8 @@ def build_group_admin_panel_content(chat_id: int, title: str) -> tuple[str, Inli
 
 async def render_group_admin_panel_message(query, chat_id: int):
     db = load_db()
+    if query.message and not get_group_panel_session(db, chat_id, query.message.message_id):
+        register_group_panel_session(db, chat_id, query.message.message_id, query.from_user.id)
     g_data = get_group_data(db, chat_id)
     text, keyboard = build_group_admin_panel_content(chat_id, g_data.get("title") or "")
     await query.message.edit_text(text, reply_markup=keyboard, parse_mode=ParseMode.HTML)
@@ -623,8 +655,8 @@ async def build_group_list_detail_content(context, chat_id: int, list_type: str,
                 lines.append(f'<b><tg-emoji emoji-id="{PREMIUM_USER_EMOJI}">👤</tg-emoji> {display} | آیدی: <code>{uid}</code> | زمان: {when} | تا: {expiry}</b>')
         if not store: lines.append(f'<b><tg-emoji emoji-id="{CROSS_CUSTOM_EMOJI_ID}">❌</tg-emoji> لیستی برای نمایش وجود ندارد.</b>')
     can_cleanup = await is_configured_group_manager(context, chat_id, viewer_id)
-    if list_type == "owners":
-        can_cleanup = await is_primary_or_bot_owner_of_group(context, chat_id, g, viewer_id)
+    # Keep the owners-list cleanup button visible to managers so an unauthorized
+    # manager gets the exact owner-only explanation instead of a silent omission.
     buttons = []
     if can_cleanup:
         buttons.append([InlineKeyboardButton("پاکسازی", callback_data=f"list_cleanup_confirm:{list_type}:{chat_id}", style="success", icon_custom_emoji_id=CLEANUP_CUSTOM_EMOJI_ID)])
@@ -639,6 +671,6 @@ async def render_cleanup_confirm(query, list_type: str, chat_id: int):
     names = {"owners": "مالکین", "admins": "مدیران", "special": "ویژه", "exempt": "معاف", "warns": "اخطارها", "muted": "سکوت ها", "banned": "بن ها"}
     kb = InlineKeyboardMarkup([[
         InlineKeyboardButton("بله", callback_data=f"list_cleanup:{list_type}:{chat_id}", style="success", icon_custom_emoji_id=CHECK_CUSTOM_EMOJI_ID),
-        InlineKeyboardButton("بستن", callback_data=f"list_cleanup_cancel:{list_type}:{chat_id}", style="danger", icon_custom_emoji_id=CROSS_CUSTOM_EMOJI_ID)
+        InlineKeyboardButton("خیر", callback_data=f"list_cleanup_cancel:{list_type}:{chat_id}", style="danger", icon_custom_emoji_id=CROSS_CUSTOM_EMOJI_ID)
     ]])
-    await query.message.edit_text(f'<b>آیا از پاکسازی کامل لیست {names.get(list_type, "موردنظر")} مطمئن هستید؟</b>', reply_markup=kb, parse_mode=ParseMode.HTML)
+    await query.message.edit_text(f'<b><tg-emoji emoji-id="{CHECK_CUSTOM_EMOJI_ID}">✔️</tg-emoji> آیا از پاکسازی کامل لیست {names.get(list_type, "موردنظر")} مطمئن هستید؟</b>', reply_markup=kb, parse_mode=ParseMode.HTML)
