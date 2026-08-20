@@ -92,6 +92,15 @@ def _clear_flow(db: dict, user_id: int):
         mark_db_dirty()
         save_db(force=True)
 
+def cancel_auto_response_flow(db: dict, user_id: int):
+    """Cancel only the private automatic-response flow for a user.
+
+    This public wrapper is used by real command handlers (/start, /panel,
+    /done) so those commands can always cancel an unfinished auto-response
+    flow without depending on a private helper name.
+    """
+    _clear_flow(db, int(user_id))
+
 
 def _flow_group(flow: dict | None) -> int:
     try:
