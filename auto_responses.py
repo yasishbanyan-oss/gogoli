@@ -697,11 +697,11 @@ async def handle_auto_response_group_message(update: Update, context: ContextTyp
             return True
 
         buttons = [[
-            InlineKeyboardButton("بله، حذف شود", callback_data=f"auto_cleanup:{chat_id}:yes", style="success", icon_custom_emoji_id=AUTO_EMOJI["delete"]),
-            InlineKeyboardButton("بستن", callback_data=f"auto_cleanup:{chat_id}:no", style="danger", icon_custom_emoji_id=AUTO_EMOJI["cancel"]),
+            InlineKeyboardButton("بله", callback_data=f"auto_cleanup:{chat_id}:yes", style="success", icon_custom_emoji_id=AUTO_EMOJI["success"]),
+            InlineKeyboardButton("خیر", callback_data=f"auto_cleanup:{chat_id}:no", style="danger", icon_custom_emoji_id=AUTO_EMOJI["cancel"]),
         ]]
         await update.message.reply_text(
-            f'<b>{_ae("delete", "❌")} آیا از حذف کامل لیست پاسخ‌های خودکار این گروه مطمئن هستید؟</b>',
+            f'<b>{_ae("success", "✔️")} آیا از حذف کامل لیست پاسخ‌های خودکار این گروه مطمئن هستید؟</b>',
             reply_markup=InlineKeyboardMarkup(buttons),
             parse_mode=ParseMode.HTML,
         )
