@@ -126,4 +126,5 @@ async def command_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE
     db = load_db()
     g_data = get_group_data(db, chat_id)
     text, keyboard = build_group_admin_panel_content(chat_id, g_data.get("title") or "")
-    await update.message.reply_text(text, reply_markup=keyboard, parse_mode=ParseMode.HTML)
+    sent = await update.message.reply_text(text, reply_markup=keyboard, parse_mode=ParseMode.HTML)
+    register_group_panel_session(db, chat_id, sent.message_id, user_id)
