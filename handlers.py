@@ -1,6 +1,28 @@
 # GoodiBot modular feature module
 from core import *
 
+
+def _looks_like_user_target(text: str) -> bool:
+    """Return True only for an actual numeric ID or Telegram-style username."""
+    value = (text or "").strip()
+    if not value:
+        return False
+    parts = value.split()
+    if len(parts) != 1:
+        return False
+    token = fa_to_en_digits(parts[0]).lstrip("@")
+    return token.isdigit() or bool(re.fullmatch(r"[A-Za-z0-9_]{5,32}", token))
+
+
+def _looks_like_duration(text: str) -> bool:
+    value = fa_to_en_digits((text or "").strip().lower()).replace("‌", " ")
+    value = re.sub(r"\s+", " ", value)
+    if not value:
+        return True
+    if value in PERMANENT_DURATION_WORDS:
+        return True
+    return bool(re.fullmatch(r"\d+(?:\.\d+)?(?:\s*(?:ثانیه|دقیقه|ساعت|روز|هفته|ماه|seconds?|minutes?|hours?|days?|weeks?|months?|s|m|h|d|w|mo))?", value))
+
 async def command_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message:
         return
@@ -98,10 +120,10 @@ async def command_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         '<b>از طریق دکمه‌های زیر میتونی کاملا با گودی آشنا بشی! <tg-emoji emoji-id="5884128023271182329">🐉</tg-emoji></b>'
     )
     kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("راهنمای سرگرمی", callback_data="help_fun", style="primary", icon_custom_emoji_id="5415940089375106928"),
-         InlineKeyboardButton("راهنمای بی ادبی", callback_data="help_rude", style="primary", icon_custom_emoji_id="5832633418386513259")],
-        [InlineKeyboardButton("راهنمای کاربردی", callback_data="help_useful", style="primary", icon_custom_emoji_id="5830338333892418460"),
-         InlineKeyboardButton("راهنمای مدیریتی", callback_data="help_admin", style="primary", icon_custom_emoji_id="5803348359972393936")]
+        [InlineKeyboardButton("راهنمای سرگرمی", callback_data=f"help_fun:{update.effective_user.id}", style="primary", icon_custom_emoji_id="5415940089375106928"),
+         InlineKeyboardButton("راهنمای بی ادبی", callback_data=f"help_rude:{update.effective_user.id}", style="primary", icon_custom_emoji_id="5832633418386513259")],
+        [InlineKeyboardButton("راهنمای کاربردی", callback_data=f"help_useful:{update.effective_user.id}", style="primary", icon_custom_emoji_id="5830338333892418460"),
+         InlineKeyboardButton("راهنمای مدیریتی", callback_data=f"help_admin:{update.effective_user.id}", style="primary", icon_custom_emoji_id="5803348359972393936")]
     ])
     await update.message.reply_text(txt, reply_markup=kb, parse_mode=ParseMode.HTML)
 
@@ -461,6 +483,8 @@ async def handle_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 matched = next((x for x in prefixes if cmd == x or cmd.startswith(x + " ")), None)
                 if matched:
                     rest = cmd[len(matched):].strip()
+                    if rest and not _looks_like_user_target(rest):
+                        return
                     # Role-management is a group-management operation. Any
                     # configured group manager (or a Telegram admin when the
                     # group has not been configured) may use it; it must not
@@ -641,6 +665,8 @@ async def handle_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 matched = next((x for x in prefixes if cmd == x or cmd.startswith(x + " ")), None)
                 if matched:
                     rest = cmd[len(matched):].strip()
+                    if rest and not _looks_like_user_target(rest):
+                        return
                     if role == "owners":
                         # The bot's OWNER_ID gets this power only when that same
                         # Telegram account is the real owner of this exact group.
@@ -689,11 +715,11 @@ async def handle_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "پاکسازی معاف": "exempt", "پاکسازی لیست معاف": "exempt"
             }
             if cmd in cleanup_cmds:
-                if not await is_configured_group_manager(context, chat_id, user_id):
-                    await update.message.reply_text(f'<b><tg-emoji emoji-id="{CROSS_CUSTOM_EMOJI_ID}">❌</tg-emoji> شما دسترسی مدیریت این گروه را ندارید.</b>', parse_mode=ParseMode.HTML); return
                 lt = cleanup_cmds[cmd]
                 if lt == "owners" and not await is_primary_or_bot_owner_of_group(context, chat_id, g_data, user_id):
-                    await update.message.reply_text(f'<b><tg-emoji emoji-id="{CROSS_CUSTOM_EMOJI_ID}">❌</tg-emoji> فقط مالک اصلی گروه اجازه پاکسازی لیست مالکین را دارد.</b>', parse_mode=ParseMode.HTML); return
+                    await update.message.reply_text(f'<b><tg-emoji emoji-id="{CROSS_CUSTOM_EMOJI_ID}">❌</tg-emoji> این دستور فقط مختص مالک گروه میباشد.</b>', parse_mode=ParseMode.HTML); return
+                if not await is_configured_group_manager(context, chat_id, user_id):
+                    await update.message.reply_text(f'<b><tg-emoji emoji-id="{CROSS_CUSTOM_EMOJI_ID}">❌</tg-emoji> شما دسترسی مدیریت این گروه را ندارید.</b>', parse_mode=ParseMode.HTML); return
                 cleanup_name = {"owners": "مالکین", "admins": "مدیران", "special": "ویژه", "exempt": "معاف", "warns": "اخطار", "muted": "سکوت", "banned": "بن"}[lt]
                 mgmt = g_data.get("management", {}) or {}
                 list_values = {
@@ -713,9 +739,9 @@ async def handle_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     return
                 kb = InlineKeyboardMarkup([[
                     InlineKeyboardButton("بله", callback_data=f"list_cleanup:{lt}:{chat_id}", style="success", icon_custom_emoji_id=CHECK_CUSTOM_EMOJI_ID),
-                    InlineKeyboardButton("بستن", callback_data=f"list_cleanup_cancel:{lt}:{chat_id}", style="danger", icon_custom_emoji_id=CROSS_CUSTOM_EMOJI_ID)
+                    InlineKeyboardButton("خیر", callback_data=f"list_cleanup_cancel:{lt}:{chat_id}", style="danger", icon_custom_emoji_id=CROSS_CUSTOM_EMOJI_ID)
                 ]])
-                await update.message.reply_text(f'<b>آیا از پاکسازی کامل لیست {cleanup_name} مطمئن هستید؟</b>', reply_markup=kb, parse_mode=ParseMode.HTML); return
+                await update.message.reply_text(f'<b><tg-emoji emoji-id="{CHECK_CUSTOM_EMOJI_ID}">✔️</tg-emoji> آیا از پاکسازی کامل لیست {cleanup_name} مطمئن هستید؟</b>', reply_markup=kb, parse_mode=ParseMode.HTML); return
 
             # Warning commands.
             warn_aliases = ["اخطار بده", "هشدار بده", "اخطار", "هشدار", "warn"]
@@ -727,6 +753,8 @@ async def handle_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if not s.get("punishment"):
                     await update.message.reply_text('<b> شما هنوز مجازاتی برای اخطار مشخص نکردید.</b>\n\n<b> با ارسال دستور پنل و رفتن به بخش تنظیمات پیشرفته مجازات کاربران را مشخص کنید.</b>', parse_mode=ParseMode.HTML); return
                 rest = cmd[len(warn_match):].strip()
+                if rest and not _looks_like_user_target(rest):
+                    return
                 uid, name, uname = await resolve_group_target(update, context, db, chat_id, rest)
                 if not uid:
                     await update.message.reply_text('<b>برای اخطار دادن باید روی کاربر ریپلای کنید یا آیدی/یوزرنیم او را وارد کنید.</b>', parse_mode=ParseMode.HTML); return
@@ -807,7 +835,10 @@ async def handle_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if del_match:
                 if not await is_configured_group_manager(context, chat_id, user_id):
                     await update.message.reply_text(f'<b><tg-emoji emoji-id="{CROSS_CUSTOM_EMOJI_ID}">❌</tg-emoji> شما مدیر گروه نیستید و دسترسی به سیستم اخطار ندارید.</b>', parse_mode=ParseMode.HTML); return
-                rest = cmd[len(del_match):].strip(); uid, name, uname = await resolve_group_target(update, context, db, chat_id, rest)
+                rest = cmd[len(del_match):].strip()
+                if rest and not _looks_like_user_target(rest):
+                    return
+                uid, name, uname = await resolve_group_target(update, context, db, chat_id, rest)
                 if not uid: await update.message.reply_text('<b>روی کاربر ریپلای کنید یا آیدی/یوزرنیم او را وارد کنید.</b>', parse_mode=ParseMode.HTML); return
                 item = g_data.setdefault("warnings", {}).get(str(uid))
                 if not item or int(item.get("count", 0)) <= 0:
@@ -826,7 +857,10 @@ async def handle_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if check_match:
                 if not await is_configured_group_manager(context, chat_id, user_id):
                     await update.message.reply_text(f'<b><tg-emoji emoji-id="{CROSS_CUSTOM_EMOJI_ID}">❌</tg-emoji> شما مدیر گروه نیستید و دسترسی به سیستم اخطار ندارید.</b>', parse_mode=ParseMode.HTML); return
-                rest = cmd[len(check_match):].strip(); uid, name, uname = await resolve_group_target(update, context, db, chat_id, rest)
+                rest = cmd[len(check_match):].strip()
+                if rest and not _looks_like_user_target(rest):
+                    return
+                uid, name, uname = await resolve_group_target(update, context, db, chat_id, rest)
                 if not uid: await update.message.reply_text('<b>روی کاربر ریپلای کنید یا آیدی/یوزرنیم او را وارد کنید.</b>', parse_mode=ParseMode.HTML); return
                 try:
                     count = int(g_data.setdefault("warnings", {}).get(str(uid), {}).get("count", 0))
@@ -876,6 +910,12 @@ async def handle_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await update.message.reply_text('<b><tg-emoji emoji-id="{0}">❌</tg-emoji> شما اجازه اجرای این دستور را ندارید.</b>'.format(CROSS_CUSTOM_EMOJI_ID), parse_mode=ParseMode.HTML); return
                 rest = cmd[len(matched):].strip()
                 reply_target = bool(update.message.reply_to_message)
+                if rest:
+                    if reply_target:
+                        if not _looks_like_duration(rest):
+                            return
+                    elif not _looks_like_user_target(rest.split()[0]) or len(rest.split()) > 1:
+                        return
                 if pre_duration:
                     target_arg = ""
                     duration_arg = pre_duration
@@ -1891,10 +1931,10 @@ async def handle_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 '<b>از طریق دکمه‌های زیر میتونی کاملا با گودی که یه اژدها کوچولو هست آشنا بشی! <tg-emoji emoji-id="5884128023271182329">🐉</tg-emoji></b>'
             )
             kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton("راهنمای سرگرمی", callback_data="help_fun", style="primary", icon_custom_emoji_id="5415940089375106928"),
-                 InlineKeyboardButton("راهنمای بی ادبی", callback_data="help_rude", style="primary", icon_custom_emoji_id="5832633418386513259")],
-                [InlineKeyboardButton("راهنمای کاربردی", callback_data="help_useful", style="primary", icon_custom_emoji_id="5830338333892418460"),
-                 InlineKeyboardButton("راهنمای مدیریتی", callback_data="help_admin", style="primary", icon_custom_emoji_id="5803348359972393936")]
+                [InlineKeyboardButton("راهنمای سرگرمی", callback_data=f"help_fun:{update.effective_user.id}", style="primary", icon_custom_emoji_id="5415940089375106928"),
+                 InlineKeyboardButton("راهنمای بی ادبی", callback_data=f"help_rude:{update.effective_user.id}", style="primary", icon_custom_emoji_id="5832633418386513259")],
+                [InlineKeyboardButton("راهنمای کاربردی", callback_data=f"help_useful:{update.effective_user.id}", style="primary", icon_custom_emoji_id="5830338333892418460"),
+                 InlineKeyboardButton("راهنمای مدیریتی", callback_data=f"help_admin:{update.effective_user.id}", style="primary", icon_custom_emoji_id="5803348359972393936")]
             ])
             await update.message.reply_text(txt, reply_markup=kb, parse_mode=ParseMode.HTML)
             return
