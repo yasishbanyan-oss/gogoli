@@ -666,14 +666,20 @@ async def handle_filter_text_commands(update: Update, context: ContextTypes.DEFA
 
     if cmd in cleanup_cmds:
         g = get_group_data(db, cid)
+        if not _filter_words(g):
+            await update.message.reply_text(
+                f'<b><tg-emoji emoji-id="{CHECK_CUSTOM_EMOJI_ID}">✔️</tg-emoji> لیست فیلتر از قبل خالی می‌باشد.</b>',
+                parse_mode=ParseMode.HTML
+            )
+            raise ApplicationHandlerStop()
         states = db.setdefault("states", {})
         states.setdefault("filter_cleanup", {})[str(uid)] = {"chat_id": cid, "message_id": None}
         kb = InlineKeyboardMarkup([[
             InlineKeyboardButton("بله", callback_data=f"filter_cleanup_cmd_do:{cid}", style="success", icon_custom_emoji_id=CHECK_CUSTOM_EMOJI_ID),
-            InlineKeyboardButton("بستن", callback_data=f"filter_cleanup_cmd_close:{cid}", style="danger", icon_custom_emoji_id=CROSS_CUSTOM_EMOJI_ID)
+            InlineKeyboardButton("خیر", callback_data=f"filter_cleanup_cmd_close:{cid}", style="danger", icon_custom_emoji_id=CROSS_CUSTOM_EMOJI_ID)
         ]])
         sent = await update.message.reply_text(
-            "<b>آیا از پاکسازی کامل لیست فیلتر مطمئن هستید؟</b>",
+            f'<b><tg-emoji emoji-id="{CHECK_CUSTOM_EMOJI_ID}">✔️</tg-emoji> آیا از پاکسازی کامل لیست فیلتر مطمئن هستید؟</b>',
             reply_markup=kb,
             parse_mode=ParseMode.HTML
         )
@@ -760,6 +766,17 @@ async def handle_filter_callback(query, context, db):
             await query.answer()
             return True
         g = get_group_data(db, cid)
+        if not _filter_words(g):
+            db["states"]["filter_cleanup"].pop(str(user_id), None)
+            mark_db_dirty()
+            save_db(force=True)
+            await query.message.edit_text(
+                f'<b><tg-emoji emoji-id="{CHECK_CUSTOM_EMOJI_ID}">✔️</tg-emoji> لیست فیلتر از قبل خالی می‌باشد.</b>',
+                reply_markup=None,
+                parse_mode=ParseMode.HTML
+            )
+            await query.answer()
+            return True
         g["filter_words"] = []
         db["states"]["filter_cleanup"].pop(str(user_id), None)
         mark_db_dirty()
