@@ -27,12 +27,18 @@ async def command_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # IMPORTANT: send the visible /start response BEFORE touching the DB.
         # A damaged/locked/very large database must never make /start appear
         # dead in PV. Database bookkeeping below is best-effort only.
-        try:
-            bot_info = await context.bot.get_me()
-            bot_username = getattr(bot_info, "username", None) or getattr(context.bot, "username", None) or ""
-        except Exception:
-            logger.exception("Failed to get bot username for /start; using fallback")
-            bot_username = getattr(context.bot, "username", None) or ""
+        # Never make the visible /start reply depend on an extra Telegram API
+        # request. The Application has already initialized the bot, so the
+        # username is normally cached on context.bot. A slow/failing get_me()
+        # here was able to make /start look completely dead in PV.
+        bot_username = getattr(context.bot, "username", None) or ""
+        if not bot_username:
+            try:
+                bot_info = await context.bot.get_me()
+                bot_username = getattr(bot_info, "username", None) or ""
+            except Exception:
+                logger.exception("Failed to get bot username for /start; continuing without group URL")
+                bot_username = ""
 
         start_pv_msg = (
             '<b>سلام عزیزم! به ربات جذاب من خوش اومدی! <tg-emoji emoji-id="5816739230482701944">⚡️</tg-emoji></b>\n'
